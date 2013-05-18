@@ -1,0 +1,39 @@
+name:                frore
+version:             0.1.0.0
+synopsis:            Display text using freetype and OpenGL
+description:         Display text using freetype and OpenGL
+homepage:            https://github.com/andrey013/frore
+license:             MIT
+license-file:        LICENSE
+author:              Andrey Yankin
+maintainer:          yankin013@gmail.com
+copyright:           Copyright (c) 2013 Andrey Yankin
+category:            Graphics
+build-type:          Simple
+cabal-version:       >=1.8
+
+library
+  -- Modules exported by the library.
+  exposed-modules:
+    Graphics.Rendering.Frore
+
+  -- Modules included in this library but not exported.
+  -- other-modules:       
+
+  -- Other library packages from which modules are imported.
+  build-depends:
+    base > 3 && < 5,
+    freetype2 >= 0.1.1,
+    OpenGL
+
+  ghc-options: -Wall
+
+executable frore-example
+  Main-is: examples/frore-example.hs
+  Build-depends:
+    base > 3 && < 5,
+    frore,
+    GLFW-b,
+    OpenGL
+
+  ghc-options: -Wall
