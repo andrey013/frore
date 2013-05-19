@@ -9,7 +9,7 @@ main :: IO ()
 main = do
   -- initialize window
   _ <- getArgsAndInitialize
-  initialDisplayMode $= [WithSamplesPerPixel 16,WithDepthBuffer,WithDepthBuffer,RGBAMode,WithAlphaComponent]
+  initialDisplayMode $= [{-WithSamplesPerPixel 16,-}WithDepthBuffer,WithDepthBuffer,RGBAMode,WithAlphaComponent]
   _ <- createWindow "Frore example"
 
    -- load shader programs
@@ -24,7 +24,7 @@ main = do
   modelMat <- newIORef =<< rotationMatrix (Vector3 0 0 (-1)) 0
 
   font <- makeFont "/usr/share/fonts/TTF/DejaVuSans.ttf"
-  (tex0, w0) <- renderText font 512 128 100 "VAVATfi"
+  tex0 <- renderText font 128 30 100 "m"
 
   -- it is needed for rendering
   clientState VertexArray $= Enabled

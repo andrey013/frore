@@ -1,3 +1,5 @@
+{-# LANGUAGE QuasiQuotes #-}
+
 module Graphics.Rendering.Frore (
     square
   , squareUV
@@ -21,8 +23,14 @@ import Graphics.Rendering.OpenGL
 import Graphics.Rendering.OpenGL.GL.Shaders.Program
 import Graphics.Rendering.OpenGL.Raw.Core31
 
-import qualified Data.Vector.Storable as S
-import qualified Data.Vector.Storable.Mutable as M
+-- import qualified Data.Vector.Storable as S
+-- import qualified Data.Vector.Storable.Mutable as M
+
+import Data.Array.Repa
+import Data.Array.Repa.Eval
+import Data.Array.Repa.Repr.ForeignPtr
+import Data.Array.Repa.Stencil
+import Data.Array.Repa.Stencil.Dim2
 
 import Foreign.C.String
 import Foreign
@@ -30,26 +38,27 @@ import Foreign
 import System.IO
 import Data.Maybe
 import Data.Foldable ( foldl' )
-import Control.Monad ( liftM )
+import Control.Monad ( liftM, (>=>) )
 
 -- big square
 square :: IO BufferObject
-square = initGeometry . S.fromList $ map (*256) $
+square = initGeometry . fromList (Z :. (18::Int)) $ Prelude.map (*256) $
   concat [[-1, -1, 0],[ 1, -1, 0],[ 1,  1, 0]
          ,[ 1,  1, 0],[-1,  1, 0],[-1, -1, 0]]
 
 -- texture coordinates
 squareUV :: IO BufferObject
-squareUV = initGeometry . S.fromList $
+squareUV = initGeometry . fromList (Z :. (12::Int)) $
   concat [[ 0, 1],[ 1, 1],[ 1, 0]
          ,[ 1, 0],[ 0, 0],[ 0, 1]]
 
-initGeometry :: S.Vector GLfloat -> IO BufferObject
+initGeometry :: Array F DIM1 GLfloat -> IO BufferObject
 initGeometry tris = do
   [vbo] <- genObjectNames 1
   bindBuffer ArrayBuffer $= Just vbo
-  let len = fromIntegral $ S.length tris * sizeOf (S.head tris)
-  S.unsafeWith tris $ \ptr ->
+  let len = fromIntegral $ (fromIntegral . Data.Array.Repa.size . extent) tris * sizeOf (tris ! (Z :. 0))
+  let fptr = toForeignPtr tris
+  withForeignPtr fptr $ \ptr ->
     bufferData ArrayBuffer $= (len, ptr, StaticDraw)
   return vbo
 
@@ -106,7 +115,10 @@ makeFont filename = do
     print errCode
     peek faceptr
 
-renderText :: Font -> Int -> Int -> Int -> String -> IO ((Maybe TextureObject), Int)
+emptySquareArray :: Int -> Array F DIM2 Word8
+emptySquareArray d = fromList (Z :. d :. d) (take (d * d) . cycle $ [0])
+
+renderText :: Font -> Int -> Int -> Int -> String -> IO (Maybe TextureObject)
 renderText face dim lineHeight size string = do
 
   ft_Set_Pixel_Sizes face 0 $ fromIntegral size
@@ -118,25 +130,24 @@ renderText face dim lineHeight size string = do
   nullGlyph <- ft_Get_Char_Index face 0
 
   withForeignPtr pen $ \pp -> do
-    pixels <- renderText' pp string nullGlyph
-    let image = S.replicate (dim * dim) (0 :: Word8)
-        buf = S.create $ do
-            vec <- S.thaw image
-            mapM_ (uncurry (M.write vec)) pixels
-            return vec
+    glyphs <- renderText' pp string nullGlyph
+    let background = emptySquareArray dim
+    let glyph = image . head $ glyphs
+    buf <- (align background >=> promote >=> blur >=> demote) glyph
+    let ptr = toForeignPtr buf
     exts <- get glExtensions
     texture <- if "GL_EXT_texture_object" `elem` exts
                   then liftM listToMaybe $ genObjectNames 1
                   else return Nothing
     textureBinding Texture2D $= texture
 
-    textureFilter Texture2D $= ((Nearest, Nothing), Nearest)
+    textureFilter Texture2D $= ((Linear', Nothing), Linear')
     textureWrapMode Texture2D S $= (Mirrored, ClampToEdge)
     textureWrapMode Texture2D T $= (Mirrored, ClampToEdge)
-    S.unsafeWith buf $ texImage2D Nothing NoProxy 0 RGBA'
+    withForeignPtr ptr $ texImage2D Nothing NoProxy 0 RGBA'
                                   (TextureSize2D (fromIntegral dim) (fromIntegral dim))
                                   0 . PixelData Alpha UnsignedByte
-    return (texture, foldl' max 0 (map ((flip mod dim).fst) pixels))
+    return texture
   where
     renderText' _ [] _ = return []
     renderText' pen (c:xc) prev = do
@@ -155,24 +166,58 @@ renderText face dim lineHeight size string = do
 
       ft_Set_Transform face nullPtr pen
 
-      ft_Load_Glyph face char $ ft_LOAD_RENDER .|. fromIntegral ft_LOAD_TARGET_NORMAL
+      ft_Load_Glyph face char $ ft_LOAD_RENDER .|. ft_LOAD_NO_HINTING .|. fromIntegral ft_LOAD_TARGET_LIGHT
 
       v <- peek $ advance slot
       pen' <- peek pen
       poke pen FT_Vector { x = x v + x pen'
                            , y = y v + y pen' }
 
-      (FT_Bitmap height width _ pixels _ _ _ _) <- peek $ GS.bitmap slot
+      (FT_Bitmap h w _ pixels _ _ _ _) <- peek $ GS.bitmap slot
       left <- liftM fromIntegral $ peek $ bitmap_left slot
       top <- liftM fromIntegral $ peek $ bitmap_top slot
 
-      let xMax = left + fromIntegral width
-          yMax = lineHeight - top + fromIntegral height
-      return $ concatMap (\(i,p) -> map (\(j,q) ->
-                  let index = q * width + p
-                      imageIndex = fromIntegral $ j * dim + i
-                      b = unsafePerformIO $ peek $ pixels `plusPtr` fromIntegral index
-                  in if b>0 then (imageIndex, b) else (0,0))
-                    (zip [ lineHeight - top .. yMax - 1] [0 .. ]))
-                    (zip [ left .. xMax - 1] [0 .. ])
-                    ++ unsafePerformIO (renderText' pen xc char)
+      let width = fromIntegral w
+          height = fromIntegral h
+      bitmap <- ptr2repa (castPtr pixels) height width
+      return $ Glyph bitmap : unsafePerformIO (renderText' pen xc char)
+
+ptr2repa :: Ptr Word8 -> Int -> Int -> IO (Array F DIM2 Word8)
+ptr2repa p i j = do
+    fp <- newForeignPtr_ p
+    return $ fromForeignPtr (Z :. i :. j) fp
+
+data Glyph = Glyph
+  { image  :: Array F DIM2 Word8
+  -- , advance :: Int
+  }
+
+align :: Monad m => Array F DIM2 Word8 -> Array F DIM2 Word8 -> m (Array F DIM2 Word8)
+align back arr = computeP $ backpermuteDft back
+      (\(Z :. i :. j) -> if (i-10>=0)&&(j-10>=0)&&(i-10<height)&&(j-10<width)
+                         then Just $ Z :. i-10 :. j-10
+                         else Nothing
+      ) arr
+ where (Z :. height :. width) = extent arr
+
+blur :: Monad m => Array F DIM2 Double -> m (Array F DIM2 Double)
+blur arr
+ = computeP $ smap (/ 159)
+            $ forStencil2 (BoundConst 0) arr
+              [stencil2|   2  4  5  4  2
+                           4  9 12  9  4
+                           5 12 15 12  5
+                           4  9 12  9  4
+                           2  4  5  4  2 |]
+
+promote :: Monad m => Array F DIM2 Word8 -> m (Array F DIM2 Double)
+promote arr = computeP $ Data.Array.Repa.map ffs arr
+ where
+  ffs :: Word8 -> Double
+  ffs x =  fromIntegral (fromIntegral x :: Int)
+
+demote  :: Monad m => Array F DIM2 Double -> m (Array F DIM2 Word8)
+demote arr = computeP $ Data.Array.Repa.map ffs arr
+ where
+  ffs   :: Double -> Word8
+  ffs x =  fromIntegral (truncate x :: Int)
