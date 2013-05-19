@@ -2,7 +2,6 @@
 import Data.IORef
 
 import Graphics.UI.GLUT
-import Graphics.Rendering.OpenGL.Raw.Core31
 import Graphics.Rendering.Frore
 
 
@@ -21,12 +20,18 @@ main = do
   matMID <- findULoc "M" p
 
   projectionMat <- newIORef =<< orthographicMatrix (Size 0 0) (Size 100 100)
-  viewMat <- newIORef =<< identityMatrix
-  modelMat <- newIORef =<< identityMatrix
+  viewMat <- newIORef =<< translationMatrix (Vector3 400 400 0)
+  modelMat <- newIORef =<< rotationMatrix (Vector3 0 0 (-1)) 0
+
+  font <- makeFont "/usr/share/fonts/TTF/DejaVuSans.ttf"
+  (tex0, w0) <- renderText font 512 128 100 "VAVATfi"
 
   -- it is needed for rendering
   clientState VertexArray $= Enabled
-  clearColor $= Color4 0.1 0.1 0.5 1
+  blend $= Enabled
+  blendFunc $= (SrcAlpha, OneMinusSrcAlpha)
+  texture Texture2D $= Enabled
+  clearColor $= Color4 1 1 1 1
   currentProgram $= Just p
 
   [vao] <- genObjectNames 1
@@ -35,26 +40,29 @@ main = do
   s <- square
   suv <- squareUV
 
-  
-  reshapeCallback $= (Just $ \s -> do
+
+  reshapeCallback $= (Just $ \s@(Size w h) -> do
     viewport $= (Position 0 0, s)
-    m <- perspectivePixelPerfectMatrix s 1500 3 (-3) -- orthographicMatrix (Size 0 0) s
-    projectionMat $= m
+    pm <- orthographicMatrix (Size 0 0) s
+    projectionMat $= pm
+    vm <- translationMatrix (Vector3 (fromIntegral . div w $ 2) (fromIntegral . div h $ 2) 0)
+    viewMat $= vm
     return ())
 
   displayCallback $= do
     clear [ColorBuffer]
 
-    -- textureBinding Texture2D $= (textures !! curImageNo)
+    textureBinding Texture2D $= tex0
 
     uniform texID $= TextureUnit 0
 
     curMat <- get projectionMat
-    withMatrix curMat $ \_ ptr -> glUniformMatrix4fv matPID 1 0 ptr
+    placeMatrix curMat matPID
+    -- withMatrix curMat $ \_ ptr -> glUniformMatrix4fv matPID 1 0 ptr
     curMat <- get viewMat
-    withMatrix curMat $ \_ ptr -> glUniformMatrix4fv matVID 1 0 ptr
+    placeMatrix curMat matVID
     curMat <- get modelMat
-    withMatrix curMat $ \_ ptr -> glUniformMatrix4fv matMID 1 0 ptr
+    placeMatrix curMat matMID
 
     bindVao 3 0 s
     bindVao 2 1 suv
@@ -64,10 +72,10 @@ main = do
 
 orthographicMatrix :: Size -> Size -> IO(GLmatrix GLfloat)
 orthographicMatrix (Size l b) (Size r t) =
-  newMatrix ColumnMajor [ 2.0/(right-left),                 0,                 0, -(right+left)/(right-left)
-                        ,                0,  2.0/(top-bottom),                 0, -(top+bottom)/(top-bottom)
-                        ,                0,                 0, -2.0/(zfar-znear), -(zfar+znear)/(zfar-znear)
-                        ,                0,                 0,                 0,                          1]
+  newMatrix ColumnMajor [ 2.0/(right-left),                 0,                 0, 0
+                        ,                0,  2.0/(top-bottom),                 0, 0
+                        ,                0,                 0, -2.0/(zfar-znear), 0
+                        , -(right+left)/(right-left), -(top+bottom)/(top-bottom), -(zfar+znear)/(zfar-znear), 1]
  where zfar   = -1
        znear  =  1
        left   = fromIntegral l
@@ -82,21 +90,24 @@ identityMatrix =
                         , 0, 0, 1, 0
                         , 0, 0, 0, 1]
 
--- | width and height defines the 2D space available at z=0, must be the same
---   as the size of the viewport.
---   z_near defines the z position of the near plane, must be greater than 0.
---   z_far defines the z position of the far plane, must be lesser than 0.
---   z_eye defines the position of the viewer, must be greater that z_near.
-perspectivePixelPerfectMatrix :: Size -> GLfloat -> GLfloat -> GLfloat -> IO(GLmatrix GLfloat)
-perspectivePixelPerfectMatrix (Size w h) z_eye z_near z_far =
-  newMatrix ColumnMajor [(2 * z_eye) / width, 0, 0, 0
-                        , 0, (2 * z_eye) / height, 0, 0
-                        , 0, 0, ktz - ksz * z_eye, -1
-                        , 0 :: GLfloat, 0, ksz, z_eye]
- where kdn = z_eye - z_near
-       kdf = z_eye - z_far
-       ksz = - (kdf + kdn) / (kdf - kdn)
-       ktz = - (2 * kdn * kdf) / (kdf - kdn)
-       width = 2 * fromIntegral (w `div` 2)
-       height = 2 * fromIntegral (h `div` 2)
+rotationMatrix :: Vector3 GLfloat -> GLfloat -> IO(GLmatrix GLfloat)
+rotationMatrix axis angle =
+  newMatrix ColumnMajor [ oc * x * x + c    , oc * x * y - z * s, oc * z * x + y * s, 0.0
+                        , oc * x * y + z * s, oc * y * y + c    , oc * y * z - x * s, 0.0
+                        , oc * z * x - y * s, oc * y * z + x * s, oc * z * z + c    , 0.0
+                        , 0.0               , 0.0               , 0.0               , 1.0]
+ where Vector3 x y z = normalizeVector3 axis
+       s  = sin angle
+       c  = cos angle
+       oc = 1 - c
 
+translationMatrix :: Vector3 GLfloat -> IO(GLmatrix GLfloat)
+translationMatrix (Vector3 x y z) =
+  newMatrix ColumnMajor [ 1, 0, 0, 0
+                        , 0, 1, 0, 0
+                        , 0, 0, 1, 0
+                        , x, y, z, 1]
+
+normalizeVector3 :: Vector3 GLfloat -> Vector3 GLfloat
+normalizeVector3 (Vector3 x y z) = Vector3 (x/l) (y/l) (z/l)
+ where l = sqrt $ x*x + y*y + z*z

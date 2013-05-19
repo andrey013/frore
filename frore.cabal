@@ -29,15 +29,13 @@ library
     OpenGLRaw
 
   ghc-options: -Wall
+  hs-source-dirs: src
 
 executable frore-example
   Main-is: examples/frore-example.hs
   Build-depends:
     base > 3 && < 5,
     frore,
-    GLUT,
-    vector,
-    OpenGL,
-    OpenGLRaw
+    GLUT
 
   ghc-options: -Wall
