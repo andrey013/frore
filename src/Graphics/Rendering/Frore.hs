@@ -42,7 +42,7 @@ import Control.Monad ( liftM, (>=>) )
 
 -- big square
 square :: IO BufferObject
-square = initGeometry . fromList (Z :. (18::Int)) $ Prelude.map (*256) $
+square = initGeometry . fromList (Z :. (18::Int)) $ Prelude.map (*512) $
   concat [[-1, -1, 0],[ 1, -1, 0],[ 1,  1, 0]
          ,[ 1,  1, 0],[-1,  1, 0],[-1, -1, 0]]
 
@@ -133,7 +133,12 @@ renderText face dim lineHeight size string = do
     glyphs <- renderText' pp string nullGlyph
     let background = emptySquareArray dim
     let glyph = image . head $ glyphs
-    buf <- (align background >=> promote >=> blur >=> demote) glyph
+    canvas <- (align background >=> promote) glyph
+    r <- (blurV  >=> demote) canvas
+    g <- (blurH  >=> demote) canvas
+    b <- (blurD1 >=> demote) canvas
+    a <- (blurD2 >=> demote) canvas
+    buf <- computeP $ interleave4 r g b a
     let ptr = toForeignPtr buf
     exts <- get glExtensions
     texture <- if "GL_EXT_texture_object" `elem` exts
@@ -146,7 +151,7 @@ renderText face dim lineHeight size string = do
     textureWrapMode Texture2D T $= (Mirrored, ClampToEdge)
     withForeignPtr ptr $ texImage2D Nothing NoProxy 0 RGBA'
                                   (TextureSize2D (fromIntegral dim) (fromIntegral dim))
-                                  0 . PixelData Alpha UnsignedByte
+                                  0 . PixelData RGBA UnsignedByte
     return texture
   where
     renderText' _ [] _ = return []
@@ -200,15 +205,45 @@ align back arr = computeP $ backpermuteDft back
       ) arr
  where (Z :. height :. width) = extent arr
 
-blur :: Monad m => Array F DIM2 Double -> m (Array F DIM2 Double)
-blur arr
- = computeP $ smap (/ 159)
+blurH :: Monad m => Array F DIM2 Double -> m (Array F DIM2 Double)
+blurH arr
+ = computeP $ smap (/ 18)
             $ forStencil2 (BoundConst 0) arr
-              [stencil2|   2  4  5  4  2
-                           4  9 12  9  4
-                           5 12 15 12  5
-                           4  9 12  9  4
-                           2  4  5  4  2 |]
+              [stencil2|   0  0  0  0  0
+                           0  0  0  0  0
+                           1  2 12  2  1
+                           0  0  0  0  0
+                           0  0  0  0  0 |]
+
+blurV :: Monad m => Array F DIM2 Double -> m (Array F DIM2 Double)
+blurV arr
+ = computeP $ smap (/ 18)
+            $ forStencil2 (BoundConst 0) arr
+              [stencil2|   0  0  1  0  0
+                           0  0  2  0  0
+                           0  0 12  0  0
+                           0  0  2  0  0
+                           0  0  1  0  0 |]
+
+blurD1 :: Monad m => Array F DIM2 Double -> m (Array F DIM2 Double)
+blurD1 arr
+ = computeP $ smap (/ 12)
+            $ forStencil2 (BoundConst 0) arr
+              [stencil2|   1  0  0  0  0
+                           0  2  0  0  0
+                           0  0  6  0  0
+                           0  0  0  2  0
+                           0  0  0  0  1 |]
+
+blurD2 :: Monad m => Array F DIM2 Double -> m (Array F DIM2 Double)
+blurD2 arr
+ = computeP $ smap (/ 12)
+            $ forStencil2 (BoundConst 0) arr
+              [stencil2|   0  0  0  0  1
+                           0  0  0  2  0
+                           0  0  6  0  0
+                           0  2  0  0  0
+                           1  0  0  0  0 |]
 
 promote :: Monad m => Array F DIM2 Word8 -> m (Array F DIM2 Double)
 promote arr = computeP $ Data.Array.Repa.map ffs arr
