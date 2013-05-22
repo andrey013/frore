@@ -23,8 +23,8 @@ import Graphics.Rendering.OpenGL
 import Graphics.Rendering.OpenGL.GL.Shaders.Program
 import Graphics.Rendering.OpenGL.Raw.Core31
 
--- import qualified Data.Vector.Storable as S
--- import qualified Data.Vector.Storable.Mutable as M
+import qualified Data.Vector.Unboxed as U
+import qualified Data.Vector.Unboxed.Mutable as UM
 
 import Data.Array.Repa
 import Data.Array.Repa.Eval
@@ -38,7 +38,8 @@ import Foreign
 import System.IO
 import Data.Maybe
 import Data.Foldable ( foldl' )
-import Control.Monad ( liftM, (>=>) )
+import Control.Monad ( liftM, (>=>), (<=<) )
+import Control.Monad.ST
 
 -- big square
 square :: IO BufferObject
@@ -115,7 +116,7 @@ makeFont filename = do
     print errCode
     peek faceptr
 
-emptySquareArray :: Int -> Array F DIM2 Word8
+emptySquareArray :: Int -> Array U DIM2 Word8
 emptySquareArray d = fromList (Z :. d :. d) (take (d * d) . cycle $ [0])
 
 renderText :: Font -> Int -> Int -> Int -> String -> IO (Maybe TextureObject)
@@ -133,12 +134,11 @@ renderText face dim lineHeight size string = do
     glyphs <- renderText' pp string nullGlyph
     let background = emptySquareArray dim
     let glyph = image . head $ glyphs
-    canvas <- (align background >=> promote) glyph
-    r <- (blurV  >=> demote) canvas
-    g <- (blurH  >=> demote) canvas
-    b <- (blurD1 >=> demote) canvas
-    a <- (blurD2 >=> demote) canvas
-    buf <- computeP $ interleave4 r g b a
+    canvas <- (align background) glyph
+    let r = distCalc canvas
+    
+    g <- ((computeP . transpose) =<< (liftM distCalc $ computeP $ transpose canvas)) :: IO (Array U DIM2 Word8)
+    buf <- computeP $ interleave3 r g canvas
     let ptr = toForeignPtr buf
     exts <- get glExtensions
     texture <- if "GL_EXT_texture_object" `elem` exts
@@ -151,7 +151,7 @@ renderText face dim lineHeight size string = do
     textureWrapMode Texture2D T $= (Mirrored, ClampToEdge)
     withForeignPtr ptr $ texImage2D Nothing NoProxy 0 RGBA'
                                   (TextureSize2D (fromIntegral dim) (fromIntegral dim))
-                                  0 . PixelData RGBA UnsignedByte
+                                  0 . PixelData RGB UnsignedByte
     return texture
   where
     renderText' _ [] _ = return []
@@ -197,7 +197,7 @@ data Glyph = Glyph
   -- , advance :: Int
   }
 
-align :: Monad m => Array F DIM2 Word8 -> Array F DIM2 Word8 -> m (Array F DIM2 Word8)
+align :: Monad m => Array U DIM2 Word8 -> Array F DIM2 Word8 -> m (Array U DIM2 Word8)
 align back arr = computeP $ backpermuteDft back
       (\(Z :. i :. j) -> if (i-10>=0)&&(j-10>=0)&&(i-10<height)&&(j-10<width)
                          then Just $ Z :. i-10 :. j-10
@@ -225,26 +225,6 @@ blurV arr
                            0  0  2  0  0
                            0  0  1  0  0 |]
 
-blurD1 :: Monad m => Array F DIM2 Double -> m (Array F DIM2 Double)
-blurD1 arr
- = computeP $ smap (/ 12)
-            $ forStencil2 (BoundConst 0) arr
-              [stencil2|   1  0  0  0  0
-                           0  2  0  0  0
-                           0  0  6  0  0
-                           0  0  0  2  0
-                           0  0  0  0  1 |]
-
-blurD2 :: Monad m => Array F DIM2 Double -> m (Array F DIM2 Double)
-blurD2 arr
- = computeP $ smap (/ 12)
-            $ forStencil2 (BoundConst 0) arr
-              [stencil2|   0  0  0  0  1
-                           0  0  0  2  0
-                           0  0  6  0  0
-                           0  2  0  0  0
-                           1  0  0  0  0 |]
-
 promote :: Monad m => Array F DIM2 Word8 -> m (Array F DIM2 Double)
 promote arr = computeP $ Data.Array.Repa.map ffs arr
  where
@@ -256,3 +236,39 @@ demote arr = computeP $ Data.Array.Repa.map ffs arr
  where
   ffs   :: Double -> Word8
   ffs x =  fromIntegral (truncate x :: Int)
+
+distCalc :: Array U DIM2 Word8 -> Array U DIM2 Word8
+distCalc arr = fromUnboxed e . calcdf . toUnboxed $ arr
+  where e = extent arr
+
+calcdf :: U.Vector Word8 -> U.Vector Word8
+calcdf = U.modify $ \v -> do
+  mapM_ (dist (subtract 1) v) [1..15000]
+  mapM_ (dist (+ 1) v) [15000, 14999 .. 0]
+  mapM_ (norm (subtract 1) v) [1..15000]
+  mapM_ (norm (+ 1) v) [15000, 14999 .. 0]
+  where
+    dist f v i = do
+      prev <- UM.read v (f i)
+      curr <- UM.read v i
+      UM.write v (i) $
+        if (curr < prev) && (curr <= 127)
+        then if prev > 127
+             then 127 - ((127-curr) `div` divider)
+             else if prev - dd > 200
+                  then 0
+                  else prev - dd
+        else if (curr < prev)
+             then 127 -- ((255-curr) `div` (divider))
+             else curr
+    norm f v i = do
+      prev <- UM.read v (f i)
+      curr <- UM.read v i
+      UM.write v i $
+        if (curr > 127) && (prev > 127)
+        then min (prev+1) curr
+        else if curr > 127
+             then 128
+             else curr
+    dd = 13
+    divider = 10
