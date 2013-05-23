@@ -253,22 +253,24 @@ calcdf = U.modify $ \v -> do
       curr <- UM.read v i
       UM.write v (i) $
         if (curr < prev) && (curr <= 127)
-        then if prev > 127
-             then 127 - ((127-curr) `div` divider)
+        then if prev >= 127
+             then 127 - ((127-curr) `div` (divider))
              else if prev - dd > 200
                   then 0
                   else prev - dd
         else if (curr < prev)
-             then 127 -- ((255-curr) `div` (divider))
+             then curr --127 -- ((255-curr) `div` (divider*2))
              else curr
     norm f v i = do
       prev <- UM.read v (f i)
       curr <- UM.read v i
       UM.write v i $
         if (curr > 127) && (prev > 127)
-        then min (prev+1) curr
+        then min (if prev + dd < 50
+                  then 255
+                  else prev + dd) curr
         else if curr > 127
-             then 128
+             then 128 + ((curr-127) `div` divider)
              else curr
-    dd = 13
-    divider = 10
+    dd = 4
+    divider = 32

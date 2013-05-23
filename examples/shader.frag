@@ -15,7 +15,7 @@ void main(){
     */
     vec4 t = texture2D(tex, UV);
     if ((t.r > 0.5) && (t.g > 0.5) ){// && (t.b > 0.5) && (t.a > 0.5)) {
-        color = vec4(0.0, 0.0, 0.0, t.a);; //vec4(0.5, UV.x, 0.1, 1.0);
+        color = vec4(0.0, 0.0, t.b, t.a); //vec4(0.5, UV.x, 0.1, 1.0);
     } else {
         color = vec4(t.r, t.g, t.b, t.a);
     }
