@@ -38,7 +38,7 @@ import Foreign
 import System.IO
 import Data.Maybe
 import Data.Foldable ( foldl' )
-import Control.Monad ( liftM, (>=>), (<=<) )
+import Control.Monad ( liftM, (>=>), (<=<), when )
 import Control.Monad.ST
 
 -- big square
@@ -171,8 +171,8 @@ renderText face dim lineHeight size string = do
 
       ft_Set_Transform face nullPtr pen
 
-      ft_Load_Glyph face char $ ft_LOAD_RENDER .|. ft_LOAD_NO_HINTING .|. fromIntegral ft_LOAD_TARGET_LIGHT
-
+      ft_Load_Glyph face char -- $ ft_LOAD_RENDER .|. ft_LOAD_NO_HINTING .|. fromIntegral ft_LOAD_TARGET_LIGHT
+        $ ft_LOAD_RENDER .|. fromIntegral ft_LOAD_TARGET_NORMAL
       v <- peek $ advance slot
       pen' <- peek pen
       poke pen FT_Vector { x = x v + x pen'
@@ -185,7 +185,7 @@ renderText face dim lineHeight size string = do
       let width = fromIntegral w
           height = fromIntegral h
       bitmap <- ptr2repa (castPtr pixels) height width
-      return $ Glyph bitmap : unsafePerformIO (renderText' pen xc char)
+      liftM (Glyph bitmap :) $ renderText' pen xc char
 
 ptr2repa :: Ptr Word8 -> Int -> Int -> IO (Array F DIM2 Word8)
 ptr2repa p i j = do
@@ -205,72 +205,34 @@ align back arr = computeP $ backpermuteDft back
       ) arr
  where (Z :. height :. width) = extent arr
 
-blurH :: Monad m => Array F DIM2 Double -> m (Array F DIM2 Double)
-blurH arr
- = computeP $ smap (/ 18)
-            $ forStencil2 (BoundConst 0) arr
-              [stencil2|   0  0  0  0  0
-                           0  0  0  0  0
-                           1  2 12  2  1
-                           0  0  0  0  0
-                           0  0  0  0  0 |]
-
-blurV :: Monad m => Array F DIM2 Double -> m (Array F DIM2 Double)
-blurV arr
- = computeP $ smap (/ 18)
-            $ forStencil2 (BoundConst 0) arr
-              [stencil2|   0  0  1  0  0
-                           0  0  2  0  0
-                           0  0 12  0  0
-                           0  0  2  0  0
-                           0  0  1  0  0 |]
-
-promote :: Monad m => Array F DIM2 Word8 -> m (Array F DIM2 Double)
-promote arr = computeP $ Data.Array.Repa.map ffs arr
- where
-  ffs :: Word8 -> Double
-  ffs x =  fromIntegral (fromIntegral x :: Int)
-
-demote  :: Monad m => Array F DIM2 Double -> m (Array F DIM2 Word8)
-demote arr = computeP $ Data.Array.Repa.map ffs arr
- where
-  ffs   :: Double -> Word8
-  ffs x =  fromIntegral (truncate x :: Int)
-
 distCalc :: Array U DIM2 Word8 -> Array U DIM2 Word8
 distCalc arr = fromUnboxed e . calcdf . toUnboxed $ arr
   where e = extent arr
 
 calcdf :: U.Vector Word8 -> U.Vector Word8
-calcdf = U.modify $ \v -> do
-  mapM_ (dist (subtract 1) v) [1..15000]
-  mapM_ (dist (+ 1) v) [15000, 14999 .. 0]
-  mapM_ (norm (subtract 1) v) [1..15000]
-  mapM_ (norm (+ 1) v) [15000, 14999 .. 0]
+calcdf orig =
+  U.modify (\v -> do
+  mapM_ (dist (subtract 1) orig v) [1..15000]
+  mapM_ (dist (+ 1) orig v) [15000, 14999 .. 0]
+  ) $ U.replicate (U.length orig) 0
   where
-    dist f v i = do
-      prev <- UM.read v (f i)
-      curr <- UM.read v i
-      UM.write v (i) $
-        if (curr < prev) && (curr <= 127)
-        then if prev >= 127
-             then 127 - ((127-curr) `div` (divider))
-             else if prev - dd > 200
-                  then 0
-                  else prev - dd
-        else if (curr < prev)
-             then curr --127 -- ((255-curr) `div` (divider*2))
-             else curr
-    norm f v i = do
-      prev <- UM.read v (f i)
-      curr <- UM.read v i
+    dist f o v i  = do
+      let prev = fromMaybe 0 $ o U.!? (f i)
+          curr = o U.! i
+      prevValue <- UM.read v (f i)
+      currValue <- UM.read v i
+      let currValueInside = if currValue == 0 then 255 else currValue
       UM.write v i $
-        if (curr > 127) && (prev > 127)
-        then min (if prev + dd < 50
-                  then 255
-                  else prev + dd) curr
-        else if curr > 127
-             then 128 + ((curr-127) `div` divider)
-             else curr
-    dd = 4
-    divider = 32
+        if (curr == 0)
+        then if prev > 0
+             then 127 - ((255-prev) `div` (divider*2))
+             else if prevValue - dd > 200
+                  then max currValue $ 0
+                  else max currValue $ prevValue - dd
+        else if prev == 0
+             then 127 + ((curr) `div` (divider*2))
+             else if prevValue + dd < 50
+                  then min currValueInside $ 255
+                  else min currValueInside $ prevValue + dd
+    dd = 32
+    divider = 4

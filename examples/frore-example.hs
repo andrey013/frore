@@ -24,7 +24,7 @@ main = do
   modelMat <- newIORef =<< rotationMatrix (Vector3 0 0 (-1)) 0
 
   font <- makeFont "/usr/share/fonts/TTF/DejaVuSans.ttf"
-  tex0 <- renderText font 128 30 128 "ф"
+  tex0 <- renderText font 128 30 24 "ф"
 
   -- it is needed for rendering
   clientState VertexArray $= Enabled
