@@ -141,7 +141,9 @@ renderText face dim lineHeight size string = do
     canvas <- align background glyph
     let r = distCalcV canvas
         g = distCalcH canvas
-    buf <- computeP $ interleave3 r g canvas
+        b = distCalcD1 canvas
+        a = distCalcD2 canvas
+    buf <- computeP $ interleave4 r g b a
     let ptr = toForeignPtr buf
     exts <- get glExtensions
     texture <- if "GL_EXT_texture_object" `elem` exts
@@ -154,7 +156,7 @@ renderText face dim lineHeight size string = do
     textureWrapMode Texture2D T $= (Mirrored, ClampToEdge)
     withForeignPtr ptr $ texImage2D Nothing NoProxy 0 RGBA'
                                   (TextureSize2D (fromIntegral 64) (fromIntegral 64))
-                                  0 . PixelData RGB UnsignedByte
+                                  0 . PixelData RGBA UnsignedByte
     return texture
   where
     renderText' _ [] _ = return []
@@ -212,46 +214,63 @@ align back arr = computeP $ backpermuteDft back
        marginTop = (h2 - h1) `div` 2
 
 distCalcH :: Array U DIM2 Word8 -> Array U DIM2 Word8
-distCalcH arr = fromUnboxed e . calcdf (+ 1) (subtract 1) . toUnboxed $ arr
+distCalcH arr = fromUnboxed e . calcdf index (+ 1) (subtract 1) . toUnboxed $ arr
   where e@(Z :. h :. w) = extent arr
+        index v i = fromMaybe 0 $ v U.!? i
 
 distCalcV :: Array U DIM2 Word8 -> Array U DIM2 Word8
-distCalcV arr = fromUnboxed e . calcdf (+ w) (subtract w) . toUnboxed $ arr
+distCalcV arr = fromUnboxed e . calcdf index (+ w) (subtract w) . toUnboxed $ arr
   where e@(Z :. h :. w) = extent arr
+        index v i = fromMaybe 0 $ v U.!? i
 
 distCalcD1 :: Array U DIM2 Word8 -> Array U DIM2 Word8
-distCalcD1 arr = fromUnboxed e . calcdf (+ (w+1)) (subtract (w+1)) . toUnboxed $ arr
+distCalcD1 arr = fromUnboxed e . calcdf index (+ (w+1)) (subtract (w+1)) . toUnboxed $ arr
   where e@(Z :. h :. w) = extent arr
+        index :: U.Vector Word8 -> Int -> Word8
+        index v i = let t = fromIntegral $ fromMaybe 0 $ v U.!? (i - w)
+                        b = fromIntegral $ fromMaybe 0 $ v U.!? (i + w)
+                        l = fromIntegral $ fromMaybe 0 $ v U.!? (i - 1)
+                        r = fromIntegral $ fromMaybe 0 $ v U.!? (i + 1)
+                        c = fromIntegral $ fromMaybe 0 $ v U.!? i
+                    in round $ 0.042893219 * (t + b + l + r) + 0.828427125 * c
 
 distCalcD2 :: Array U DIM2 Word8 -> Array U DIM2 Word8
-distCalcD2 arr = fromUnboxed e . calcdf (+ (w-1)) (subtract (w-1)) . toUnboxed $ arr
+distCalcD2 arr = fromUnboxed e . calcdf index (+ (w-1)) (subtract (w-1)) . toUnboxed $ arr
   where e@(Z :. h :. w) = extent arr
+        index :: U.Vector Word8 -> Int -> Word8
+        index v i = let t = fromIntegral $ fromMaybe 0 $ v U.!? (i - w)
+                        b = fromIntegral $ fromMaybe 0 $ v U.!? (i + w)
+                        l = fromIntegral $ fromMaybe 0 $ v U.!? (i - 1)
+                        r = fromIntegral $ fromMaybe 0 $ v U.!? (i + 1)
+                        c = fromIntegral $ fromMaybe 0 $ v U.!? i
+                    in round $ 0.042893219 * (t + b + l + r) + 0.828427125 * c
 
-calcdf :: (Int -> Int) -> (Int -> Int) -> U.Vector Word8 -> U.Vector Word8
-calcdf n p orig =
+calcdf :: (U.Vector Word8 -> Int -> Word8) -> (Int -> Int) -> (Int -> Int) -> U.Vector Word8 -> U.Vector Word8
+calcdf indexFunction n p orig =
   U.modify (\v -> do
-    mapM_ (dist p orig v) [0 .. U.length orig - 1]
-    mapM_ (dist n orig v) [U.length orig - 1, U.length orig - 2 .. 0]
+    mapM_ (dist p v) [0 .. U.length orig - 1]
+    mapM_ (dist n v) [U.length orig - 1, U.length orig - 2 .. 0]
   ) $ U.replicate (U.length orig) 0
   where
-    dist f o v i  = do
-      let prev = fromMaybe 0 $ o U.!? (f i)
-          curr = o U.! i
-          l = U.length o
+    dist f v i  = do
+      let prev = indexFunction orig $ f i -- fromMaybe 0 $ o U.!? (f i)
+          curr = indexFunction orig i -- o U.! i
+          l = U.length orig
       prevValue <- if f i >= l || f i < 0 then return 0 else UM.read v (f i)
       currValue <- UM.read v i
       let currValueInside = if currValue == 0 then 255 else currValue
       UM.write v i $
-        if (curr == 0)
-        then if prev > 0
+        if (curr <= boundary)
+        then if prev > boundary
              then max currValue $ 127 - ((255-prev) `div` (divider*2))
              else if prevValue - dd > 200
                   then max currValue $ 0
                   else max currValue $ prevValue - dd
-        else if prev == 0
+        else if prev <= boundary
              then min currValueInside $ 127 + ((curr) `div` (divider*2))
              else if prevValue + dd < 50
                   then min currValueInside $ 255
                   else min currValueInside $ prevValue + dd
-    dd = 32
-    divider = 4
+    dd = 16
+    divider = 8
+    boundary = 0
