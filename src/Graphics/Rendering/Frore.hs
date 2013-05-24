@@ -119,6 +119,9 @@ makeFont filename = do
 emptySquareArray :: Int -> Array U DIM2 Word8
 emptySquareArray d = fromList (Z :. d :. d) (take (d * d) . cycle $ [0])
 
+emptyArray :: DIM2 -> Array U DIM2 Word8
+emptyArray d@(Z :. h :. w) = fromList (Z :. h + 4 :. w + 4) (take ((h + 4) * (w + 4)) . cycle $ [0])
+
 renderText :: Font -> Int -> Int -> Int -> String -> IO (Maybe TextureObject)
 renderText face dim lineHeight size string = do
 
@@ -132,9 +135,10 @@ renderText face dim lineHeight size string = do
 
   withForeignPtr pen $ \pp -> do
     glyphs <- renderText' pp string nullGlyph
-    let background = emptySquareArray dim
     let glyph = image . head $ glyphs
-    canvas <- (align background) glyph
+        dims@(Z :. h :. w) = extent glyph
+    let background = emptySquareArray $ 64
+    canvas <- align background glyph
     let r = distCalc canvas
     
     g <- ((computeP . transpose) =<< (liftM distCalc $ computeP $ transpose canvas)) :: IO (Array U DIM2 Word8)
@@ -150,7 +154,7 @@ renderText face dim lineHeight size string = do
     textureWrapMode Texture2D S $= (Mirrored, ClampToEdge)
     textureWrapMode Texture2D T $= (Mirrored, ClampToEdge)
     withForeignPtr ptr $ texImage2D Nothing NoProxy 0 RGBA'
-                                  (TextureSize2D (fromIntegral dim) (fromIntegral dim))
+                                  (TextureSize2D (fromIntegral 64) (fromIntegral 64))
                                   0 . PixelData RGB UnsignedByte
     return texture
   where
@@ -199,11 +203,14 @@ data Glyph = Glyph
 
 align :: Monad m => Array U DIM2 Word8 -> Array F DIM2 Word8 -> m (Array U DIM2 Word8)
 align back arr = computeP $ backpermuteDft back
-      (\(Z :. i :. j) -> if (i-10>=0)&&(j-10>=0)&&(i-10<height)&&(j-10<width)
-                         then Just $ Z :. i-10 :. j-10
+      (\(Z :. i :. j) -> if (i>=marginTop)&&(j>=marginLeft) &&(i<h1+marginTop)&&(j<w1+marginLeft)
+                         then Just $ Z :. i-marginTop :. j-marginLeft
                          else Nothing
       ) arr
- where (Z :. height :. width) = extent arr
+ where (Z :. h1 :. w1) = extent arr
+       (Z :. h2 :. w2) = extent back
+       marginLeft = (w2 - w1) `div` 2
+       marginTop = (h2 - h1) `div` 2
 
 distCalc :: Array U DIM2 Word8 -> Array U DIM2 Word8
 distCalc arr = fromUnboxed e . calcdf . toUnboxed $ arr
@@ -212,8 +219,8 @@ distCalc arr = fromUnboxed e . calcdf . toUnboxed $ arr
 calcdf :: U.Vector Word8 -> U.Vector Word8
 calcdf orig =
   U.modify (\v -> do
-  mapM_ (dist (subtract 1) orig v) [1..15000]
-  mapM_ (dist (+ 1) orig v) [15000, 14999 .. 0]
+    mapM_ (dist (subtract 1) orig v) [1 .. U.length orig - 1]
+    mapM_ (dist (+ 1) orig v) [U.length orig - 2, U.length orig - 3 .. 0]
   ) $ U.replicate (U.length orig) 0
   where
     dist f o v i  = do
@@ -225,12 +232,12 @@ calcdf orig =
       UM.write v i $
         if (curr == 0)
         then if prev > 0
-             then 127 - ((255-prev) `div` (divider*2))
+             then max currValue $ 127 - ((255-prev) `div` (divider*2))
              else if prevValue - dd > 200
                   then max currValue $ 0
                   else max currValue $ prevValue - dd
         else if prev == 0
-             then 127 + ((curr) `div` (divider*2))
+             then min currValueInside $ 127 + ((curr) `div` (divider*2))
              else if prevValue + dd < 50
                   then min currValueInside $ 255
                   else min currValueInside $ prevValue + dd

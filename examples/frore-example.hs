@@ -23,8 +23,8 @@ main = do
   viewMat <- newIORef =<< translationMatrix (Vector3 400 400 0)
   modelMat <- newIORef =<< rotationMatrix (Vector3 0 0 (-1)) 0
 
-  font <- makeFont "/usr/share/fonts/TTF/DejaVuSans.ttf"
-  tex0 <- renderText font 128 30 24 "ф"
+  font <- makeFont "/usr/share/fonts/TTF/DejaVuSans-Oblique.ttf"
+  tex0 <- renderText font 128 30 32 "ф"
 
   -- it is needed for rendering
   clientState VertexArray $= Enabled
