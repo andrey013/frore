@@ -139,9 +139,8 @@ renderText face dim lineHeight size string = do
         dims@(Z :. h :. w) = extent glyph
     let background = emptySquareArray $ 64
     canvas <- align background glyph
-    let r = distCalc canvas
-    
-    g <- ((computeP . transpose) =<< (liftM distCalc $ computeP $ transpose canvas)) :: IO (Array U DIM2 Word8)
+    let r = distCalcV canvas
+        g = distCalcH canvas
     buf <- computeP $ interleave3 r g canvas
     let ptr = toForeignPtr buf
     exts <- get glExtensions
@@ -212,21 +211,34 @@ align back arr = computeP $ backpermuteDft back
        marginLeft = (w2 - w1) `div` 2
        marginTop = (h2 - h1) `div` 2
 
-distCalc :: Array U DIM2 Word8 -> Array U DIM2 Word8
-distCalc arr = fromUnboxed e . calcdf . toUnboxed $ arr
-  where e = extent arr
+distCalcH :: Array U DIM2 Word8 -> Array U DIM2 Word8
+distCalcH arr = fromUnboxed e . calcdf (+ 1) (subtract 1) . toUnboxed $ arr
+  where e@(Z :. h :. w) = extent arr
 
-calcdf :: U.Vector Word8 -> U.Vector Word8
-calcdf orig =
+distCalcV :: Array U DIM2 Word8 -> Array U DIM2 Word8
+distCalcV arr = fromUnboxed e . calcdf (+ w) (subtract w) . toUnboxed $ arr
+  where e@(Z :. h :. w) = extent arr
+
+distCalcD1 :: Array U DIM2 Word8 -> Array U DIM2 Word8
+distCalcD1 arr = fromUnboxed e . calcdf (+ (w+1)) (subtract (w+1)) . toUnboxed $ arr
+  where e@(Z :. h :. w) = extent arr
+
+distCalcD2 :: Array U DIM2 Word8 -> Array U DIM2 Word8
+distCalcD2 arr = fromUnboxed e . calcdf (+ (w-1)) (subtract (w-1)) . toUnboxed $ arr
+  where e@(Z :. h :. w) = extent arr
+
+calcdf :: (Int -> Int) -> (Int -> Int) -> U.Vector Word8 -> U.Vector Word8
+calcdf n p orig =
   U.modify (\v -> do
-    mapM_ (dist (subtract 1) orig v) [1 .. U.length orig - 1]
-    mapM_ (dist (+ 1) orig v) [U.length orig - 2, U.length orig - 3 .. 0]
+    mapM_ (dist p orig v) [0 .. U.length orig - 1]
+    mapM_ (dist n orig v) [U.length orig - 1, U.length orig - 2 .. 0]
   ) $ U.replicate (U.length orig) 0
   where
     dist f o v i  = do
       let prev = fromMaybe 0 $ o U.!? (f i)
           curr = o U.! i
-      prevValue <- UM.read v (f i)
+          l = U.length o
+      prevValue <- if f i >= l || f i < 0 then return 0 else UM.read v (f i)
       currValue <- UM.read v i
       let currValueInside = if currValue == 0 then 255 else currValue
       UM.write v i $
