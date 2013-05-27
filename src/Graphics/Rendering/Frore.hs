@@ -38,7 +38,7 @@ import Foreign
 import System.IO
 import Data.Maybe
 import Data.Foldable ( foldl' )
-import Control.Monad ( liftM, (>=>), (<=<), when )
+import Control.Monad ( liftM, liftM2, (>=>), (<=<), when )
 import Control.Monad.ST
 
 -- big square
@@ -122,7 +122,19 @@ emptySquareArray d = fromList (Z :. d :. d) (take (d * d) . cycle $ [0])
 emptyArray :: DIM2 -> Array U DIM2 Word8
 emptyArray d@(Z :. h :. w) = fromList (Z :. h + 4 :. w + 4) (take ((h + 4) * (w + 4)) . cycle $ [0])
 
-renderText :: Font -> Int -> Int -> Int -> String -> IO (Maybe TextureObject)
+drawTexture buf mode = do
+  let ptr = toForeignPtr buf
+  texture <- liftM listToMaybe $ genObjectNames 1
+  textureBinding Texture2D $= texture
+  textureFilter Texture2D $= ((mode, Nothing), mode)
+  textureWrapMode Texture2D S $= (Mirrored, ClampToEdge)
+  textureWrapMode Texture2D T $= (Mirrored, ClampToEdge)
+  withForeignPtr ptr $ texImage2D Nothing NoProxy 0 RGBA'
+                                  (TextureSize2D (fromIntegral 64) (fromIntegral 64))
+                                  0 . PixelData RGBA UnsignedByte
+  return texture
+
+renderText :: Font -> Int -> Int -> Int -> String -> IO (Maybe TextureObject, Maybe TextureObject)
 renderText face dim lineHeight size string = do
 
   ft_Set_Pixel_Sizes face 0 $ fromIntegral size
@@ -143,21 +155,9 @@ renderText face dim lineHeight size string = do
         g = distCalcH canvas
         b = distCalcD1 canvas
         a = distCalcD2 canvas
-    buf <- computeP $ interleave4 r g b a
-    let ptr = toForeignPtr buf
-    exts <- get glExtensions
-    texture <- if "GL_EXT_texture_object" `elem` exts
-                  then liftM listToMaybe $ genObjectNames 1
-                  else return Nothing
-    textureBinding Texture2D $= texture
-
-    textureFilter Texture2D $= ((Linear', Nothing), Linear')
-    textureWrapMode Texture2D S $= (Mirrored, ClampToEdge)
-    textureWrapMode Texture2D T $= (Mirrored, ClampToEdge)
-    withForeignPtr ptr $ texImage2D Nothing NoProxy 0 RGBA'
-                                  (TextureSize2D (fromIntegral 64) (fromIntegral 64))
-                                  0 . PixelData RGBA UnsignedByte
-    return texture
+    buf1 <- computeP $ interleave4 r g b a
+    buf2 <- computeP $ interleave4 canvas canvas canvas canvas
+    liftM2 (,) (drawTexture buf1 Linear') (drawTexture buf2 Nearest)
   where
     renderText' _ [] _ = return []
     renderText' pen (c:xc) prev = do
@@ -176,8 +176,8 @@ renderText face dim lineHeight size string = do
 
       ft_Set_Transform face nullPtr pen
 
-      ft_Load_Glyph face char -- $ ft_LOAD_RENDER .|. ft_LOAD_NO_HINTING .|. fromIntegral ft_LOAD_TARGET_LIGHT
-        $ ft_LOAD_RENDER .|. fromIntegral ft_LOAD_TARGET_NORMAL
+      ft_Load_Glyph face char $ ft_LOAD_RENDER .|. ft_LOAD_NO_HINTING .|. fromIntegral ft_LOAD_TARGET_LIGHT
+        -- $ ft_LOAD_RENDER .|. fromIntegral ft_LOAD_TARGET_NORMAL
       v <- peek $ advance slot
       pen' <- peek pen
       poke pen FT_Vector { x = x v + x pen'

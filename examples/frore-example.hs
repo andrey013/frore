@@ -12,19 +12,26 @@ main = do
   initialDisplayMode $= [{-WithSamplesPerPixel 16,-}WithDepthBuffer,WithDepthBuffer,RGBAMode,WithAlphaComponent]
   _ <- createWindow "Frore example"
 
-   -- load shader programs
-  p <- loadShaders "examples/shader.vert" "examples/shader.frag"
-  texID <- get $ uniformLocation p "tex"
-  matPID <- findULoc "P" p
-  matVID <- findULoc "V" p
-  matMID <- findULoc "M" p
+  -- load shader programs
+  p1 <- loadShaders "examples/shader.vert" "examples/shader.frag"
+  texID1 <- get $ uniformLocation p1 "tex"
+  matPID1 <- findULoc "P" p1
+  matVID1 <- findULoc "V" p1
+  matMID1 <- findULoc "M" p1
+
+  -- load shader programs
+  p2 <- loadShaders "examples/shader.vert" "examples/simple.frag"
+  texID2 <- get $ uniformLocation p2 "tex"
+  matPID2 <- findULoc "P" p2
+  matVID2 <- findULoc "V" p2
+  matMID2 <- findULoc "M" p2
 
   projectionMat <- newIORef =<< orthographicMatrix (Size 0 0) (Size 100 100)
   viewMat <- newIORef =<< translationMatrix (Vector3 400 400 0)
   modelMat <- newIORef =<< rotationMatrix (Vector3 0 0 (-1)) 0
 
   font <- makeFont "/usr/share/fonts/TTF/DejaVuSans.ttf"
-  tex0 <- renderText font 128 30 32 "ф"
+  (tex1, tex2) <- renderText font 128 30 64 "ж"
 
   -- it is needed for rendering
   clientState VertexArray $= Enabled
@@ -32,14 +39,12 @@ main = do
   blendFunc $= (SrcAlpha, OneMinusSrcAlpha)
   texture Texture2D $= Enabled
   clearColor $= Color4 1 1 1 1
-  currentProgram $= Just p
 
   [vao] <- genObjectNames 1
   bindVertexArrayObject $= Just vao
 
   s <- square
   suv <- squareUV
-
 
   reshapeCallback $= (Just $ \s@(Size w h) -> do
     viewport $= (Position 0 0, s)
@@ -52,21 +57,34 @@ main = do
   displayCallback $= do
     clear [ColorBuffer]
 
-    textureBinding Texture2D $= tex0
-
-    uniform texID $= TextureUnit 0
-
-    curMat <- get projectionMat
-    placeMatrix curMat matPID
-    -- withMatrix curMat $ \_ ptr -> glUniformMatrix4fv matPID 1 0 ptr
-    curMat <- get viewMat
-    placeMatrix curMat matVID
-    curMat <- get modelMat
-    placeMatrix curMat matMID
-
     bindVao 3 0 s
     bindVao 2 1 suv
+
+    uniform texID1 $= TextureUnit 0
+    curMat <- get projectionMat
+    placeMatrix curMat matPID1
+    curMat <- get viewMat
+    placeMatrix curMat matVID1
+    curMat <- get modelMat
+    placeMatrix curMat matMID1
+
+    textureBinding Texture2D $= tex1
+    currentProgram $= Just p1
     drawArrays Triangles 0 6
+
+
+    uniform texID2 $= TextureUnit 0
+    curMat <- get projectionMat
+    placeMatrix curMat matPID2
+    curMat <- get viewMat
+    placeMatrix curMat matVID2
+    curMat <- get modelMat
+    placeMatrix curMat matMID2
+
+    textureBinding Texture2D $= tex2
+    currentProgram $= Just p2
+    drawArrays Triangles 0 6
+
     swapBuffers
   mainLoop
 
