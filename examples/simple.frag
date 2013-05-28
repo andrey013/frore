@@ -11,7 +11,7 @@ uniform sampler2D tex;
 
 void main(){
     vec4 t = texture2D(tex, UV);
-    color = vec4(t.r, t.g, t.b, 0.5);
+    color = vec4(t.r, t.g, t.b, 0.8);
     /*
     
     if ((t.r > 0.5) && (t.g > 0.5) && (t.b > 0.5) && (t.a > 0.5)){

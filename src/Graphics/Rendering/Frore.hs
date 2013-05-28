@@ -214,17 +214,17 @@ align back arr = computeP $ backpermuteDft back
        marginTop = (h2 - h1) `div` 2
 
 distCalcH :: Array U DIM2 Word8 -> Array U DIM2 Word8
-distCalcH arr = fromUnboxed e . calcdf index (+ 1) (subtract 1) . toUnboxed $ arr
+distCalcH arr = fromUnboxed e . calcdf index (+ w) (subtract w) (+ 1) (subtract 1) . toUnboxed $ arr
   where e@(Z :. h :. w) = extent arr
         index v i = fromMaybe 0 $ v U.!? i
 
 distCalcV :: Array U DIM2 Word8 -> Array U DIM2 Word8
-distCalcV arr = fromUnboxed e . calcdf index (+ w) (subtract w) . toUnboxed $ arr
+distCalcV arr = fromUnboxed e . calcdf index (+ 1) (subtract 1) (+ w) (subtract w) . toUnboxed $ arr
   where e@(Z :. h :. w) = extent arr
         index v i = fromMaybe 0 $ v U.!? i
 
 distCalcD1 :: Array U DIM2 Word8 -> Array U DIM2 Word8
-distCalcD1 arr = fromUnboxed e . calcdf index (+ (w+1)) (subtract (w+1)) . toUnboxed $ arr
+distCalcD1 arr = fromUnboxed e . calcdf index id id (+ (w+1)) (subtract (w+1)) . toUnboxed $ arr
   where e@(Z :. h :. w) = extent arr
         index :: U.Vector Word8 -> Int -> Word8
         index v i = let t = fromIntegral $ fromMaybe 0 $ v U.!? (i - w)
@@ -235,7 +235,7 @@ distCalcD1 arr = fromUnboxed e . calcdf index (+ (w+1)) (subtract (w+1)) . toUnb
                     in round $ 0.042893219 * (t + b + l + r) + 0.828427125 * c
 
 distCalcD2 :: Array U DIM2 Word8 -> Array U DIM2 Word8
-distCalcD2 arr = fromUnboxed e . calcdf index (+ (w-1)) (subtract (w-1)) . toUnboxed $ arr
+distCalcD2 arr = fromUnboxed e . calcdf index id id (+ (w-1)) (subtract (w-1)) . toUnboxed $ arr
   where e@(Z :. h :. w) = extent arr
         index :: U.Vector Word8 -> Int -> Word8
         index v i = let t = fromIntegral $ fromMaybe 0 $ v U.!? (i - w)
@@ -245,18 +245,19 @@ distCalcD2 arr = fromUnboxed e . calcdf index (+ (w-1)) (subtract (w-1)) . toUnb
                         c = fromIntegral $ fromMaybe 0 $ v U.!? i
                     in round $ 0.042893219 * (t + b + l + r) + 0.828427125 * c
 
-calcdf :: (U.Vector Word8 -> Int -> Word8) -> (Int -> Int) -> (Int -> Int) -> U.Vector Word8 -> U.Vector Word8
-calcdf indexFunction n p orig =
+calcdf :: (U.Vector Word8 -> Int -> Word8) -> (Int -> Int) -> (Int -> Int) -> (Int -> Int) -> (Int -> Int) -> U.Vector Word8 -> U.Vector Word8
+calcdf indexFunction tn tp n p orig =
   U.modify (\v -> do
-    mapM_ (dist p v) [0 .. U.length orig - 1]
-    mapM_ (dist n v) [U.length orig - 1, U.length orig - 2 .. 0]
+    mapM_ (dist tp p v) [0 .. U.length orig - 1]
+    mapM_ (dist tn n v) [U.length orig - 1, U.length orig - 2 .. 0]
   ) $ U.replicate (U.length orig) 0
   where
-    dist f v i  = do
+    dist t f v i  = do
       let prev = indexFunction orig $ f i -- fromMaybe 0 $ o U.!? (f i)
           curr = indexFunction orig i -- o U.! i
           l = U.length orig
       prevValue <- if f i >= l || f i < 0 then return 0 else UM.read v (f i)
+      topValue <- if t i >= l || t i < 0 then return 0 else UM.read v (t i)
       currValue <- UM.read v i
       let currValueInside = if currValue == 0 then 255 else currValue
       UM.write v i $
@@ -264,7 +265,7 @@ calcdf indexFunction n p orig =
         then if prev > boundary
              then max currValue $ 127 - ((255-prev) `div` (divider*2))
              else if prevValue - dd > 200
-                  then max currValue $ 0
+                  then max currValue $ 0 -- if currValue == 0 then topValue else currValue
                   else max currValue $ prevValue - dd
         else if prev <= boundary
              then min currValueInside $ 127 + ((curr) `div` (divider*2))
